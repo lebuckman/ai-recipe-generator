@@ -45,7 +45,7 @@ The project follows the AWS hands-on tutorial [Build a Serverless Web Applicatio
    - An **HTTP data source** sends that request, signed with an IAM role that may invoke exactly one model.
 4. **Result.** The resolver pulls the text out of Claude's response, or passes Bedrock's error message along. The UI displays the result.
 
-The browser never holds AWS credentials or a model API key. It holds only a Cognito token, and the only thing that token allows is calling this one query.
+The browser never calls Bedrock directly and holds no credentials that can. It calls `askBedrock` with a Cognito token, and only AppSync's IAM role can reach the model.
 
 ## Tech stack
 
@@ -157,9 +157,9 @@ Open the local URL, choose **Create Account**, confirm the emailed code, and gen
 | `us-east-1` written into the endpoint, signing region and policy ARN | Region and account read from the CDK stack | Deploys in any region (here `us-east-2`). Keeps the account ID out of a public repo. |
 | IAM policy on one foundation-model ARN | Policy on the inference profile and the model in `us-east-1`, `us-east-2`, `us-west-2` | Inference profiles route between regions, and each possible target must be allowed. |
 | Resolver parses `content[0].text` unconditionally | Returns `{ error }` on non-200 responses, and the UI shows it | Bedrock errors such as access denied become readable messages instead of a parse failure. |
-| `main.tsx` imports `./App.jsx` | Imports `./App.tsx` | The file is TypeScript. |
+| `main.tsx` imports `./App.jsx` | Imports `./App.tsx` | Matches the actual filename. Optional: the build also resolves `./App.jsx` to the `.tsx` file. |
 | Plain `import` of types | `import type { Schema }`, `type FormEvent` | Required by the Vite template's `verbatimModuleSyntax`. Otherwise `npm run build` fails. |
-| No `resolveJsonModule` | Added to `tsconfig.app.json` | Lets TypeScript import `amplify_outputs.json`. |
+| No `resolveJsonModule` | Added to `tsconfig.app.json` | Makes the `amplify_outputs.json` import explicit. Optional: it type-checks without the flag under `moduleResolution: bundler`. |
 | Default (frontend-only) Amplify build settings | `amplify.yml` with a backend phase, plus a service role | Without them, the hosted build has no backend and no `amplify_outputs.json`. |
 | (none) | `overrides` in `package.json` for `@aws-cdk/toolkit-lib` and `@opentelemetry/core` | Amplify's packages pin conflicting versions of these. `npm install` tolerates that, but `npm ci` (used in CI) rejects the lockfile. |
 
@@ -177,15 +177,16 @@ Everything is pay-per-use. **An idle deployment costs about $0.**
 ## Security notes
 
 - **Least privilege.** AppSync's data source role may call `bedrock:InvokeModel` on one model and nothing else.
-- **No secrets in the client or the repo.**
-  - `amplify_outputs.json` is gitignored. Even so, it holds only public identifiers: the user pool ID and the API URL.
+- **No AWS secrets in the client or the repo.**
+  - `amplify_outputs.json` is gitignored but bundled into the frontend, so treat everything in it as public: the user pool and identity pool IDs, the API URL, and the AppSync API key.
   - The account ID is looked up when the stack deploys, never written in the code.
+- **Identity pool.** `defineAuth` also creates a Cognito identity pool with guest access enabled, which can issue temporary AWS credentials to the browser. The app's code doesn't use them, and no permissions were added to those roles.
 - **Public sign-up.** Anyone can create an account and spend Bedrock tokens. Before leaving this deployed long-term, add:
   - per-user rate limiting or quotas;
   - input length validation;
   - AWS WAF on the AppSync API;
   - a budget alert.
-- **Unused API key.** The data schema's default authorization mode is an API key (30-day expiry), but `askBedrock` accepts only signed-in users. The key is created and never used. A redeploy rotates it.
+- **Unused API key.** The data schema's default authorization mode is an API key (30-day expiry), but `askBedrock` accepts only signed-in users. The app never uses the key, but it ships in the client bundle, so any operation later opened to API-key access would be public.
 
 ## Clean up
 
